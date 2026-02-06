@@ -139,6 +139,11 @@
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
 
     <script>
+        // Attendre le chargement complet de MediaPipe
+        window.drawConnectors = window.drawConnectors || function() {};
+        window.drawLandmarks = window.drawLandmarks || function() {};
+        window.HANDS_CONNECTIONS = window.HANDS_CONNECTIONS || [];
+
         // Configuration et variables globales
         let config = null;
         let currentImageId = 1;
@@ -239,8 +244,8 @@
 
                 // Dessiner les mains
                 for (let i = 0; i < hands.length; i++) {
-                    drawConnectors(canvasCtx, hands[i], HANDS_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
-                    drawLandmarks(canvasCtx, hands[i], {color: '#FF0000', lineWidth: 1, radius: 3});
+                    window.drawConnectors(canvasCtx, hands[i], window.HANDS_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
+                    window.drawLandmarks(canvasCtx, hands[i], {color: '#FF0000', lineWidth: 1, radius: 3});
                 }
 
                 // Détecter les gestes
@@ -332,10 +337,11 @@
         });
 
         hands.setOptions({
+            selfieMode: true,
             maxNumHands: 2,
             modelComplexity: 1,
-            minDetectionConfidence: 0.7,
-            minTrackingConfidence: 0.7
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
         });
 
         hands.onResults(onResults);
@@ -344,7 +350,11 @@
         async function initCamera() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { width: 640, height: 480 }
+                    video: { 
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        facingMode: 'user'
+                    }
                 });
                 webcam.srcObject = stream;
 
@@ -356,22 +366,27 @@
                     };
                 });
 
-                const camera = new Camera(webcam, {
-                    onFrame: async () => {
-                        await hands.send({ image: webcam });
-                    },
-                    width: 640,
-                    height: 480
-                });
-
-                camera.start();
+                // Démarrer le traitement vidéo
+                processVideo();
+                
                 loading.style.display = 'none';
                 statusText.textContent = 'Système actif';
             } catch (error) {
                 console.error('Erreur caméra:', error);
-                statusText.textContent = 'Erreur caméra';
+                statusText.textContent = 'Erreur caméra: ' + error.message;
                 loading.textContent = 'Erreur: Caméra non accessible';
             }
+        }
+
+        // Traitement vidéo frame par frame
+        async function processVideo() {
+            async function sendFrame() {
+                if (webcam.readyState === webcam.HAVE_ENOUGH_DATA) {
+                    await hands.send({ image: webcam });
+                }
+                requestAnimationFrame(sendFrame);
+            }
+            sendFrame();
         }
 
         // Démarrage de l'application
