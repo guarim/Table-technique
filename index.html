@@ -112,6 +112,42 @@
             font-size: 24px;
             z-index: 2000;
         }
+
+        #pointer {
+            position: fixed;
+            width: 30px;
+            height: 30px;
+            border: 3px solid #00FF00;
+            border-radius: 50%;
+            background: rgba(0, 255, 0, 0.3);
+            pointer-events: none;
+            z-index: 500;
+            display: none;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 15px rgba(0, 255, 0, 0.8);
+        }
+
+        #pointer::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 8px;
+            height: 8px;
+            background: #00FF00;
+            border-radius: 50%;
+        }
+
+        #pointer.active {
+            border-color: #FF0000;
+            background: rgba(255, 0, 0, 0.3);
+            box-shadow: 0 0 15px rgba(255, 0, 0, 0.8);
+        }
+
+        #pointer.active::after {
+            background: #FF0000;
+        }
     </style>
 </head>
 <body>
@@ -119,6 +155,8 @@
         <img id="mainImage" src="" alt="Image principale">
         <div id="debugZones"></div>
     </div>
+
+    <div id="pointer"></div>
 
     <div id="videoContainer">
         <video id="webcam" autoplay playsinline></video>
@@ -151,6 +189,10 @@
         let isZooming = false;
         let lastDistance = 0;
         let baseZoom = 1.0;
+        let translateX = 0;
+        let translateY = 0;
+        let lastCenterX = 0;
+        let lastCenterY = 0;
 
         const mainImage = document.getElementById('mainImage');
         const webcam = document.getElementById('webcam');
@@ -161,6 +203,7 @@
         const gestureText = document.getElementById('gestureText');
         const zoomLevelText = document.getElementById('zoomLevel');
         const loading = document.getElementById('loading');
+        const pointer = document.getElementById('pointer');
 
         // Charger la configuration
         async function loadConfig() {
@@ -183,6 +226,8 @@
                 currentImageId = imageId;
                 currentImageText.textContent = imageData.file;
                 currentZoom = 1.0;
+                translateX = 0;
+                translateY = 0;
                 updateZoom();
                 drawDebugZones(imageData.zones);
             }
@@ -204,10 +249,30 @@
             });
         }
 
-        // Mettre à jour le zoom
+        // Mettre à jour le zoom et la translation
         function updateZoom() {
-            mainImage.style.transform = `scale(${currentZoom})`;
+            mainImage.style.transform = `translate(${translateX}px, ${translateY}px) scale(${currentZoom})`;
             zoomLevelText.textContent = currentZoom.toFixed(2) + 'x';
+        }
+
+        // Mettre à jour la position du pointeur
+        function updatePointer(indexLandmark, isPinching) {
+            if (indexLandmark) {
+                const x = indexLandmark.x * window.innerWidth;
+                const y = indexLandmark.y * window.innerHeight;
+                
+                pointer.style.left = x + 'px';
+                pointer.style.top = y + 'px';
+                pointer.style.display = 'block';
+                
+                if (isPinching) {
+                    pointer.classList.add('active');
+                } else {
+                    pointer.classList.remove('active');
+                }
+            } else {
+                pointer.style.display = 'none';
+            }
         }
 
         // Calculer la distance entre deux points
@@ -262,7 +327,7 @@
             canvasCtx.restore();
         }
 
-        // Gérer deux mains (zoom)
+        // Gérer deux mains (zoom + translation)
         function handleTwoHands(hands, handedness) {
             const hand1 = hands[0];
             const hand2 = hands[1];
@@ -273,37 +338,83 @@
             if (pinch1 && pinch2) {
                 const thumb1 = hand1[4];
                 const thumb2 = hand2[4];
+                
+                // Calculer le centre entre les deux mains
+                const centerX = (thumb1.x + thumb2.x) / 2;
+                const centerY = (thumb1.y + thumb2.y) / 2;
+                
                 const distance = calculateDistance(thumb1, thumb2);
 
                 if (!isZooming) {
                     isZooming = true;
                     lastDistance = distance;
                     baseZoom = currentZoom;
-                    gestureText.textContent = 'Mode Zoom Actif';
+                    lastCenterX = centerX;
+                    lastCenterY = centerY;
+                    gestureText.textContent = 'Mode Zoom + Translation Actif';
                     gestureText.className = 'gesture-active';
                 } else {
+                    // Calcul du zoom
                     const ratio = distance / lastDistance;
                     currentZoom = Math.max(1.0, Math.min(5.0, baseZoom * ratio));
+                    
+                    // Calcul de la translation (uniquement si zoomé)
+                    if (currentZoom > 1.0) {
+                        const deltaX = (centerX - lastCenterX) * window.innerWidth * 2;
+                        const deltaY = (centerY - lastCenterY) * window.innerHeight * 2;
+                        translateX += deltaX;
+                        translateY += deltaY;
+                        
+                        // Limiter la translation
+                        const maxTranslate = 500;
+                        translateX = Math.max(-maxTranslate, Math.min(maxTranslate, translateX));
+                        translateY = Math.max(-maxTranslate, Math.min(maxTranslate, translateY));
+                    } else {
+                        // Réinitialiser la translation si zoom = 1
+                        translateX = 0;
+                        translateY = 0;
+                    }
+                    
+                    lastCenterX = centerX;
+                    lastCenterY = centerY;
+                    
                     updateZoom();
-                    gestureText.textContent = `Zoom: ${currentZoom.toFixed(2)}x`;
+                    gestureText.textContent = `Zoom: ${currentZoom.toFixed(2)}x | Translation: ${Math.round(translateX)}, ${Math.round(translateY)}`;
                 }
+                
+                // Masquer le pointeur en mode zoom
+                pointer.style.display = 'none';
             } else {
                 if (isZooming) {
                     isZooming = false;
+                    // Réinitialiser la translation si on sort du zoom
+                    if (currentZoom === 1.0) {
+                        translateX = 0;
+                        translateY = 0;
+                        updateZoom();
+                    }
                     gestureText.textContent = 'Zoom désactivé';
                     gestureText.className = '';
                 }
             }
         }
 
-        // Gérer une main (sélection de zone)
+        // Gérer une main (sélection de zone + pointeur)
         function handleOneHand(hand, handInfo) {
             if (isZooming) return;
 
             const isPinch = isPinching(hand);
+            const index = hand[8]; // Index finger tip
+            
+            // Identifier la main droite
+            const isRightHand = handInfo.label === 'Right';
+            
+            // Afficher le pointeur uniquement pour la main droite
+            if (isRightHand) {
+                updatePointer(index, isPinch);
+            }
 
-            if (isPinch) {
-                const index = hand[8];
+            if (isPinch && isRightHand) {
                 const imageRect = mainImage.getBoundingClientRect();
                 const imageData = config.images.find(img => img.id === currentImageId);
 
@@ -324,7 +435,7 @@
                     gestureText.textContent = 'Pinch détecté (hors zone)';
                 }
             } else {
-                gestureText.textContent = 'Main détectée';
+                gestureText.textContent = isRightHand ? 'Main droite détectée' : 'Main gauche détectée';
                 gestureText.className = '';
             }
         }
