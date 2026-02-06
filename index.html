@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Détection de Mains - Navigation Interactive</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            background: #000;
+            font-family: Arial, sans-serif;
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        #mainImage {
+            position: absolute;
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            transition: transform 0.3s ease;
+            transform-origin: center center;
+        }
+
+        #videoContainer {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            width: 320px;
+            height: 240px;
+            border: 2px solid #fff;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #000;
+            z-index: 1000;
+        }
+
+        #webcam {
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1);
+        }
+
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1);
+        }
+
+        #status {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            z-index: 1000;
+            max-width: 300px;
+        }
+
+        .status-item {
+            margin: 5px 0;
+        }
+
+        .gesture-active {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+
+        #debugZones {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .debug-zone {
+            position: absolute;
+            border: 2px dashed rgba(255, 0, 0, 0.5);
+            background: rgba(255, 0, 0, 0.1);
+            pointer-events: none;
+        }
+
+        .loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            font-size: 24px;
+            z-index: 2000;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <img id="mainImage" src="" alt="Image principale">
+        <div id="debugZones"></div>
+    </div>
+
+    <div id="videoContainer">
+        <video id="webcam" autoplay playsinline></video>
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <div id="status">
+        <div class="status-item">État: <span id="statusText">Initialisation...</span></div>
+        <div class="status-item">Image: <span id="currentImage">-</span></div>
+        <div class="status-item">Geste: <span id="gestureText">-</span></div>
+        <div class="status-item">Zoom: <span id="zoomLevel">1.0x</span></div>
+    </div>
+
+    <div class="loading" id="loading">Chargement de MediaPipe...</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+
+    <script>
+        // Configuration et variables globales
+        let config = null;
+        let currentImageId = 1;
+        let currentZoom = 1.0;
+        let isZooming = false;
+        let lastDistance = 0;
+        let baseZoom = 1.0;
+
+        const mainImage = document.getElementById('mainImage');
+        const webcam = document.getElementById('webcam');
+        const canvasElement = document.getElementById('canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const statusText = document.getElementById('statusText');
+        const currentImageText = document.getElementById('currentImage');
+        const gestureText = document.getElementById('gestureText');
+        const zoomLevelText = document.getElementById('zoomLevel');
+        const loading = document.getElementById('loading');
+
+        // Charger la configuration
+        async function loadConfig() {
+            try {
+                const response = await fetch('config.json');
+                config = await response.json();
+                loadImage(currentImageId);
+                statusText.textContent = 'Configuration chargée';
+            } catch (error) {
+                console.error('Erreur chargement config:', error);
+                statusText.textContent = 'Erreur config';
+            }
+        }
+
+        // Charger une image
+        function loadImage(imageId) {
+            const imageData = config.images.find(img => img.id === imageId);
+            if (imageData) {
+                mainImage.src = imageData.file;
+                currentImageId = imageId;
+                currentImageText.textContent = imageData.file;
+                currentZoom = 1.0;
+                updateZoom();
+                drawDebugZones(imageData.zones);
+            }
+        }
+
+        // Dessiner les zones de debug
+        function drawDebugZones(zones) {
+            const debugContainer = document.getElementById('debugZones');
+            debugContainer.innerHTML = '';
+            
+            zones.forEach((zone, index) => {
+                const zoneDiv = document.createElement('div');
+                zoneDiv.className = 'debug-zone';
+                zoneDiv.style.left = zone.pt1.x + 'px';
+                zoneDiv.style.top = zone.pt1.y + 'px';
+                zoneDiv.style.width = (zone.pt2.x - zone.pt1.x) + 'px';
+                zoneDiv.style.height = (zone.pt2.y - zone.pt1.y) + 'px';
+                debugContainer.appendChild(zoneDiv);
+            });
+        }
+
+        // Mettre à jour le zoom
+        function updateZoom() {
+            mainImage.style.transform = `scale(${currentZoom})`;
+            zoomLevelText.textContent = currentZoom.toFixed(2) + 'x';
+        }
+
+        // Calculer la distance entre deux points
+        function calculateDistance(p1, p2) {
+            return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+        }
+
+        // Vérifier si le pouce et l'index se touchent
+        function isPinching(landmarks) {
+            const thumb = landmarks[4];
+            const index = landmarks[8];
+            const distance = calculateDistance(thumb, index);
+            return distance < 0.05; // Seuil de proximité
+        }
+
+        // Vérifier si un point est dans une zone
+        function isInZone(point, zone, imageRect) {
+            const x = point.x * imageRect.width + imageRect.left;
+            const y = point.y * imageRect.height + imageRect.top;
+            
+            return x >= zone.pt1.x && x <= zone.pt2.x &&
+                   y >= zone.pt1.y && y <= zone.pt2.y;
+        }
+
+        // Traiter les résultats de MediaPipe
+        function onResults(results) {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks && results.multiHandedness) {
+                const hands = results.multiHandLandmarks;
+                const handedness = results.multiHandedness;
+
+                // Dessiner les mains
+                for (let i = 0; i < hands.length; i++) {
+                    drawConnectors(canvasCtx, hands[i], HANDS_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
+                    drawLandmarks(canvasCtx, hands[i], {color: '#FF0000', lineWidth: 1, radius: 3});
+                }
+
+                // Détecter les gestes
+                if (hands.length === 2) {
+                    handleTwoHands(hands, handedness);
+                } else if (hands.length === 1) {
+                    handleOneHand(hands[0], handedness[0]);
+                }
+            } else {
+                gestureText.textContent = 'Aucune main détectée';
+                isZooming = false;
+            }
+
+            canvasCtx.restore();
+        }
+
+        // Gérer deux mains (zoom)
+        function handleTwoHands(hands, handedness) {
+            const hand1 = hands[0];
+            const hand2 = hands[1];
+
+            const pinch1 = isPinching(hand1);
+            const pinch2 = isPinching(hand2);
+
+            if (pinch1 && pinch2) {
+                const thumb1 = hand1[4];
+                const thumb2 = hand2[4];
+                const distance = calculateDistance(thumb1, thumb2);
+
+                if (!isZooming) {
+                    isZooming = true;
+                    lastDistance = distance;
+                    baseZoom = currentZoom;
+                    gestureText.textContent = 'Mode Zoom Actif';
+                    gestureText.className = 'gesture-active';
+                } else {
+                    const ratio = distance / lastDistance;
+                    currentZoom = Math.max(1.0, Math.min(5.0, baseZoom * ratio));
+                    updateZoom();
+                    gestureText.textContent = `Zoom: ${currentZoom.toFixed(2)}x`;
+                }
+            } else {
+                if (isZooming) {
+                    isZooming = false;
+                    gestureText.textContent = 'Zoom désactivé';
+                    gestureText.className = '';
+                }
+            }
+        }
+
+        // Gérer une main (sélection de zone)
+        function handleOneHand(hand, handInfo) {
+            if (isZooming) return;
+
+            const isPinch = isPinching(hand);
+
+            if (isPinch) {
+                const index = hand[8];
+                const imageRect = mainImage.getBoundingClientRect();
+                const imageData = config.images.find(img => img.id === currentImageId);
+
+                if (imageData) {
+                    for (let zone of imageData.zones) {
+                        if (isInZone(index, zone, imageRect)) {
+                            gestureText.textContent = `Zone détectée → ${zone.targetImage}`;
+                            gestureText.className = 'gesture-active';
+                            
+                            // Charger la nouvelle image
+                            const targetImageData = config.images.find(img => img.file === zone.targetImage);
+                            if (targetImageData) {
+                                loadImage(targetImageData.id);
+                            }
+                            return;
+                        }
+                    }
+                    gestureText.textContent = 'Pinch détecté (hors zone)';
+                }
+            } else {
+                gestureText.textContent = 'Main détectée';
+                gestureText.className = '';
+            }
+        }
+
+        // Initialiser MediaPipe Hands
+        const hands = new Hands({
+            locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }
+        });
+
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
+
+        hands.onResults(onResults);
+
+        // Initialiser la caméra
+        async function initCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480 }
+                });
+                webcam.srcObject = stream;
+
+                await new Promise((resolve) => {
+                    webcam.onloadedmetadata = () => {
+                        canvasElement.width = webcam.videoWidth;
+                        canvasElement.height = webcam.videoHeight;
+                        resolve();
+                    };
+                });
+
+                const camera = new Camera(webcam, {
+                    onFrame: async () => {
+                        await hands.send({ image: webcam });
+                    },
+                    width: 640,
+                    height: 480
+                });
+
+                camera.start();
+                loading.style.display = 'none';
+                statusText.textContent = 'Système actif';
+            } catch (error) {
+                console.error('Erreur caméra:', error);
+                statusText.textContent = 'Erreur caméra';
+                loading.textContent = 'Erreur: Caméra non accessible';
+            }
+        }
+
+        // Démarrage de l'application
+        async function init() {
+            await loadConfig();
+            await initCamera();
+        }
+
+        // Lancer l'application
+        init();
+    </script>
+</body>
+</html>
