@@ -193,6 +193,8 @@
         let translateY = 0;
         let lastCenterX = 0;
         let lastCenterY = 0;
+        let lastImageChange = 0;
+        let imageChangeDelay = 1000; // 1 seconde de délai entre les changements d'image
 
         const mainImage = document.getElementById('mainImage');
         const webcam = document.getElementById('webcam');
@@ -220,6 +222,13 @@
 
         // Charger une image
         function loadImage(imageId) {
+            const now = Date.now();
+            // Vérifier le délai anti-rebond
+            if (now - lastImageChange < imageChangeDelay) {
+                console.log('Changement d\'image trop rapide, ignoré');
+                return;
+            }
+            
             const imageData = config.images.find(img => img.id === imageId);
             if (imageData) {
                 mainImage.src = imageData.file;
@@ -230,6 +239,10 @@
                 translateY = 0;
                 updateZoom();
                 drawDebugZones(imageData.zones);
+                lastImageChange = now;
+                console.log('Image chargée:', imageData.file);
+            } else {
+                console.error('Image non trouvée pour l\'ID:', imageId);
             }
         }
 
@@ -256,7 +269,7 @@
         }
 
         // Mettre à jour la position du pointeur
-        function updatePointer(indexLandmark, isPinching) {
+        function updatePointer(indexLandmark, isPointing) {
             if (indexLandmark) {
                 const x = indexLandmark.x * window.innerWidth;
                 const y = indexLandmark.y * window.innerHeight;
@@ -265,7 +278,7 @@
                 pointer.style.top = y + 'px';
                 pointer.style.display = 'block';
                 
-                if (isPinching) {
+                if (isPointing) {
                     pointer.classList.add('active');
                 } else {
                     pointer.classList.remove('active');
@@ -280,12 +293,42 @@
             return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
         }
 
-        // Vérifier si le pouce et l'index se touchent
+        // Vérifier si le pouce et l'index se touchent (pour le zoom)
         function isPinching(landmarks) {
             const thumb = landmarks[4];
             const index = landmarks[8];
             const distance = calculateDistance(thumb, index);
             return distance < 0.05; // Seuil de proximité
+        }
+
+        // Vérifier si l'index est levé et les autres doigts baissés (pour la sélection)
+        function isPointingIndex(landmarks) {
+            const indexTip = landmarks[8];
+            const indexPip = landmarks[6];
+            const middleTip = landmarks[12];
+            const middlePip = landmarks[10];
+            const ringTip = landmarks[16];
+            const ringPip = landmarks[14];
+            const pinkyTip = landmarks[20];
+            const pinkyPip = landmarks[18];
+            const wrist = landmarks[0];
+            
+            // L'index doit être levé (le bout est plus haut que l'articulation)
+            const indexExtended = indexTip.y < indexPip.y;
+            
+            // Le majeur doit être baissé
+            const middleFolded = middleTip.y > middlePip.y;
+            
+            // L'annulaire doit être baissé
+            const ringFolded = ringTip.y > ringPip.y;
+            
+            // L'auriculaire doit être baissé
+            const pinkyFolded = pinkyTip.y > pinkyPip.y;
+            
+            // L'index doit être significativement plus haut que le poignet
+            const indexRaised = (wrist.y - indexTip.y) > 0.1;
+            
+            return indexExtended && middleFolded && ringFolded && pinkyFolded && indexRaised;
         }
 
         // Vérifier si un point est dans une zone
@@ -356,7 +399,7 @@
                 } else {
                     // Calcul du zoom
                     const ratio = distance / lastDistance;
-                    currentZoom = Math.max(1.0, Math.min(5.0, baseZoom * ratio));
+                    currentZoom = Math.max(1.0, Math.min(8.0, baseZoom * ratio));
                     
                     // Calcul de la translation (uniquement si zoomé)
                     if (currentZoom > 1.0) {
@@ -401,9 +444,12 @@
 
         // Gérer une main (sélection de zone + pointeur)
         function handleOneHand(hand, handInfo) {
-            if (isZooming) return;
+            if (isZooming) {
+                pointer.style.display = 'none';
+                return;
+            }
 
-            const isPinch = isPinching(hand);
+            const isPointing = isPointingIndex(hand);
             const index = hand[8]; // Index finger tip
             
             // Identifier la main droite
@@ -411,31 +457,52 @@
             
             // Afficher le pointeur uniquement pour la main droite
             if (isRightHand) {
-                updatePointer(index, isPinch);
+                updatePointer(index, isPointing);
+            } else {
+                pointer.style.display = 'none';
             }
 
-            if (isPinch && isRightHand) {
+            if (isPointing && isRightHand) {
                 const imageRect = mainImage.getBoundingClientRect();
                 const imageData = config.images.find(img => img.id === currentImageId);
 
                 if (imageData) {
+                    // Convertir la position de l'index en coordonnées d'écran
+                    const screenX = index.x * window.innerWidth;
+                    const screenY = index.y * window.innerHeight;
+                    
+                    // Vérifier si le pointeur est dans une zone
                     for (let zone of imageData.zones) {
-                        if (isInZone(index, zone, imageRect)) {
+                        if (screenX >= zone.pt1.x && screenX <= zone.pt2.x &&
+                            screenY >= zone.pt1.y && screenY <= zone.pt2.y) {
+                            
                             gestureText.textContent = `Zone détectée → ${zone.targetImage}`;
                             gestureText.className = 'gesture-active';
                             
-                            // Charger la nouvelle image
+                            // Trouver l'image cible par nom de fichier
                             const targetImageData = config.images.find(img => img.file === zone.targetImage);
                             if (targetImageData) {
-                                loadImage(targetImageData.id);
+                                // Charger uniquement si ce n'est pas déjà l'image actuelle
+                                if (targetImageData.id !== currentImageId) {
+                                    loadImage(targetImageData.id);
+                                }
+                            } else {
+                                // Si l'image cible n'existe pas dans la config, essayer de la charger directement
+                                console.log('Image non trouvée dans config, tentative de chargement direct:', zone.targetImage);
+                                mainImage.src = zone.targetImage;
+                                currentImageText.textContent = zone.targetImage;
                             }
                             return;
                         }
                     }
-                    gestureText.textContent = 'Pinch détecté (hors zone)';
+                    gestureText.textContent = 'Index levé (hors zone)';
                 }
             } else {
-                gestureText.textContent = isRightHand ? 'Main droite détectée' : 'Main gauche détectée';
+                if (isRightHand) {
+                    gestureText.textContent = 'Main droite détectée';
+                } else {
+                    gestureText.textContent = 'Main gauche détectée';
+                }
                 gestureText.className = '';
             }
         }
