@@ -1,5 +1,3 @@
-# Table-technique
-Consultation dossier technique
 # Application de Détection de Mains - Navigation Interactive
 
 ## Description
@@ -11,19 +9,20 @@ Application web utilisant MediaPipe Hands pour détecter les gestes de la main e
 - **Affichage**: Cercle vert qui suit l'index de la main droite
 - **États**:
   - Vert : Main détectée en mouvement
-  - Rouge : Geste pinch actif (pouce + index qui se touchent)
+  - Rouge : Geste d'index levé actif (index levé, autres doigts baissés)
 - **Visibilité**: Actif uniquement avec une seule main droite, masqué en mode zoom
 
 ### 2. Navigation par zones
-- **Geste**: Pouce + Index de la main droite qui se touchent (pinch)
+- **Geste**: Index levé, autres doigts baissés (👆 geste de pointage)
 - **Action**: Lorsque le geste est détecté dans une zone définie, l'image change selon la configuration
 - 6 zones rectangulaires par image
 - Le pointeur devient rouge lors de l'activation
+- **Anti-rebond**: Délai de 1 seconde entre les changements d'image pour éviter les sélections multiples
 
 ### 3. Zoom interactif + Translation
-- **Geste**: Les deux mains avec pouces et index qui se touchent simultanément
+- **Geste**: Les deux mains avec pouces et index qui se touchent simultanément (pinch)
 - **Actions**: 
-  - **Zoom**: Écarter/rapprocher les mains (1x à 5x)
+  - **Zoom**: Écarter/rapprocher les mains (1x à 8x)
   - **Translation**: Déplacer les deux mains ensemble pour bouger l'image zoomée
     - Déplacement horizontal (axe X)
     - Déplacement vertical (axe Y)
@@ -78,16 +77,17 @@ Application web utilisant MediaPipe Hands pour détecter les gestes de la main e
 
 ### Gestes détaillés
 
-#### Navigation simple
+#### Navigation simple (AMÉLIORÉ - Plus stable)
 1. Montrer la **main droite** uniquement
 2. Le pointeur vert suit votre index
-3. Faire un **pinch** (pouce + index) → le pointeur devient rouge
+3. **Lever l'index** en gardant les autres doigts baissés 👆 → le pointeur devient rouge
 4. Placer le pointeur dans une zone → l'image change
+5. **Délai de sécurité**: 1 seconde entre chaque changement d'image
 
 #### Zoom et déplacement
 1. Montrer les **deux mains**
-2. Faire un **pinch avec chaque main** (pouce + index)
-3. **Écarter les mains** = zoom avant
+2. Faire un **pinch avec chaque main** (pouce + index qui se touchent)
+3. **Écarter les mains** = zoom avant (jusqu'à 8x)
 4. **Rapprocher les mains** = zoom arrière
 5. **Déplacer les deux mains ensemble** = translation de l'image
 6. Relâcher le pinch pour sortir du mode zoom
@@ -125,15 +125,25 @@ minTrackingConfidence: 0.5        // Confiance tracking
 
 ## Seuils et limites
 
-- **Distance pinch**: < 0.05 (distance normalisée entre pouce et index)
-- **Zoom**: 1.0x (min) à 5.0x (max)
+- **Distance pinch**: < 0.05 (distance normalisée entre pouce et index) - Pour le zoom uniquement
+- **Geste index levé**: 
+  - Index tendu (bout plus haut que l'articulation)
+  - Majeur, annulaire, auriculaire pliés
+  - Index à plus de 0.1 au-dessus du poignet
+- **Zoom**: 1.0x (min) à 8.0x (max)
 - **Translation**: ±500px sur chaque axe
 - **Sensibilité translation**: x2 (mouvement amplifié pour meilleur contrôle)
+- **Anti-rebond changement d'image**: 1 seconde entre chaque changement
 
 ## Points de repère utilisés
 
+- **Landmark 0**: Poignet
 - **Landmark 4**: Pouce (bout)
+- **Landmark 6**: Index (articulation PIP)
 - **Landmark 8**: Index (bout)
+- **Landmark 10, 12**: Majeur (articulation, bout)
+- **Landmark 14, 16**: Annulaire (articulation, bout)
+- **Landmark 18, 20**: Auriculaire (articulation, bout)
 - **Détection main**: Label 'Right' ou 'Left' fourni par MediaPipe
 
 ## Personnalisation
@@ -146,9 +156,11 @@ Dans le CSS, section `#pointer`:
 
 ### Modifier les seuils
 Dans le code JavaScript:
-- `distance < 0.05` : Sensibilité du pinch
-- `Math.min(5.0, ...)` : Zoom maximum
+- `distance < 0.05` : Sensibilité du pinch (zoom)
+- `Math.min(8.0, ...)` : Zoom maximum
 - `maxTranslate = 500` : Limite de translation
+- `imageChangeDelay = 1000` : Délai anti-rebond en millisecondes (1000 = 1 seconde)
+- Position Y pour détection doigts baissés : Ajuster les comparaisons `middleTip.y > middlePip.y`
 
 ### Changer la sensibilité de translation
 Modifier le multiplicateur:
@@ -160,12 +172,45 @@ const deltaY = (centerY - lastCenterY) * window.innerHeight * 2; // Modifier le 
 ### Masquer les zones debug
 Commentez l'appel à `drawDebugZones()` dans `loadImage()`
 
+## Améliorations de stabilité
+
+### Geste de sélection repensé
+Le geste de sélection utilise maintenant **l'index levé** au lieu du pinch pour éviter:
+- Les zooms intempestifs lors de la navigation
+- Les confusions entre gestes de sélection et de zoom
+- Les faux positifs dus aux mouvements de main
+
+### Anti-rebond
+- **Délai de 1 seconde** entre chaque changement d'image
+- Évite les sélections multiples accidentelles
+- Permet de traverser des zones sans déclencher plusieurs changements
+- Configurable via `imageChangeDelay`
+
+### Détection de zones améliorée
+- Utilise les coordonnées d'écran directes (plus précis)
+- Fallback sur chargement direct si l'image n'est pas dans la config
+- Logs console pour le débogage
+- Vérification de l'ID avant changement pour éviter les rechargements inutiles
+
 ## Dépannage
 
 ### Le pointeur ne s'affiche pas
 - Vérifier que vous utilisez la **main droite**
 - Améliorer l'éclairage
 - Vérifier la console du navigateur (F12)
+
+### Le geste d'index levé n'est pas détecté
+- Assurez-vous que **seul l'index est levé**
+- Les autres doigts (majeur, annulaire, auriculaire) doivent être **bien repliés**
+- Levez l'index **bien au-dessus** du niveau des autres doigts
+- Évitez les positions ambiguës (semi-pliées)
+
+### Les images ne changent pas
+- Vérifiez la console (F12) pour voir les logs de chargement
+- Vérifiez que les fichiers PNG existent dans le même dossier
+- Vérifiez que les noms dans config.json correspondent exactement aux fichiers
+- Attendez 1 seconde entre chaque changement (anti-rebond)
+- Vérifiez que l'ID dans config.json est correct
 
 ### La translation est trop sensible/pas assez
 - Modifier le multiplicateur (actuellement x2) dans les calculs deltaX/deltaY
